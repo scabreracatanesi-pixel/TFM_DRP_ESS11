@@ -1,0 +1,26 @@
+{
+    "id": "9C1FA59C",
+    "path": "~/R_Projects/TFM_DRP_ESS11/01_build_party_vote.R",
+    "project_path": "01_build_party_vote.R",
+    "type": "r_source",
+    "hash": "3223939730",
+    "contents": "",
+    "dirty": false,
+    "created": 1780042493440.0,
+    "source_on_save": false,
+    "relative_order": 2,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "207,0",
+        "scrollLine": "192"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1780048581,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1780048581452,
+    "read_only": false,
+    "read_only_alternatives": []
+}

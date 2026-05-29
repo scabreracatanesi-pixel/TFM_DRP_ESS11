@@ -1,0 +1,203 @@
+# ============================================================
+# 01_build_party_vote.R
+# Objetivo: crear party_vote (voto efectivo) y vote_drp (VD)
+# ============================================================
+
+rm(list = ls())
+
+library(haven)
+library(dplyr)
+library(readxl)
+
+# ============================================================
+# FASE 1 · Cargar ESS11
+# ============================================================
+
+ess <- read_sav("data/ESS11e04_0.csv")
+
+# ============================================================
+# FASE 2 · ID único por fila
+# ============================================================
+
+ess <- ess %>% mutate(row_id = row_number())
+
+# ============================================================
+# FASE 3 · Crear party_vote SIN pivot_longer (mantiene labels por país)
+# ============================================================
+
+prt_cols <- grep("^prtvt", names(ess), value = TRUE)
+
+ess2 <- ess %>%
+  # 3.1 Convertir CADA prtvt* a texto conservando sus labels
+  mutate(across(all_of(prt_cols), ~ enc2utf8(as.character(haven::as_factor(.))))) %>%
+  # 3.2 Quedarnos con el único no-NA por fila (voto efectivo)
+  mutate(
+    party_vote = dplyr::coalesce(!!!rlang::syms(prt_cols)),
+    party_vote_chr = enc2utf8(as.character(party_vote)),
+    cntry_iso2 = as.character(cntry)
+  )
+
+# ============================================================
+# FASE 4 · Cargar matching final (cntry, party_vote, is_drp)
+# ============================================================
+
+matching <- read_excel("data/matching_final_blindado.xlsx")
+print(names(matching))  # debe ser: cntry party_vote is_drp
+
+matching2 <- matching %>%
+  transmute(
+    cntry = as.character(cntry),  # ISO2: FR, AT, ES...
+    party_vote = enc2utf8(as.character(party_vote)),
+    is_drp = as.numeric(is_drp)
+  )
+
+matching2 <- matching2 %>%
+  group_by(cntry, party_vote) %>%
+  summarise(is_drp = max(is_drp, na.rm = TRUE), .groups = "drop")
+
+print(matching2)
+# ============================================================
+# FASE 5 · Diagnósticos rápidos (antes del join)
+# ============================================================
+
+cat("\n--- Países en ESS con voto (party_vote no NA) ---\n")
+print(ess2 %>% filter(!is.na(party_vote_chr)) %>% count(cntry_iso2) %>% arrange(desc(n)))
+
+cat("\n--- Ejemplo FR (ESS) partidos distintos ---\n")
+print(ess2 %>% filter(cntry_iso2 == "FR", !is.na(party_vote_chr)) %>% distinct(party_vote_chr) %>% head(30))
+
+cat("\n--- Ejemplo FR (matching) ---\n")
+print(matching2 %>% filter(cntry == "FR") %>% distinct(party_vote))
+
+# ============================================================
+# FASE 6 · Join + VD
+# ============================================================
+
+ess3 <- ess2 %>%
+  left_join(
+    matching2,
+    by = c("cntry_iso2" = "cntry", "party_vote_chr" = "party_vote")
+  ) %>%
+  mutate(
+    vote_drp = case_when(
+      is.na(party_vote_chr) ~ NA_real_,  # no hay voto efectivo
+      is.na(is_drp) ~ NA_real_,          # hay voto pero no clasificable (no match)
+      is_drp == 1 ~ 1,
+      is_drp == 0 ~ 0
+    )
+  )
+
+ess3 <- ess3 %>%
+  mutate(
+    vote_drp = case_when(
+      is.na(party_vote_chr) ~ NA_real_,  # no hay voto efectivo
+      is_drp == 1 ~ 1,                   # voto DRP
+      TRUE ~ 0                           # cualquier otro voto efectivo
+    )
+  )
+# ============================================================
+# FASE 7 · Checks finales
+# ============================================================
+
+cat("\n--- Tabla general vote_drp ---\n")
+print(table(ess3$vote_drp, useNA = "ifany"))
+
+cat("\n--- Países con votos DRP (=1) ---\n")
+print(ess3 %>% filter(vote_drp == 1) %>% count(cntry_iso2, sort = TRUE))
+
+cat("\n--- Partidos que generan DRP (=1) ---\n")
+print(ess3 %>% filter(vote_drp == 1) %>% count(cntry_iso2, party_vote_chr, sort = TRUE))
+
+# ============================================================
+# FASE 8 · CHECK DUPLICADOS MATCHING
+# ============================================================
+matching2 %>%
+  count(cntry, party_vote) %>%
+  filter(n > 1) %>%
+  arrange(desc(n))
+
+# ============================================================
+# FASE 9 · CONSULTA
+# ============================================================
+
+ess3 %>%
+  filter(!is.na(vote_drp)) %>%
+  group_by(cntry_iso2) %>%
+  summarise(
+    n_total = n(),
+    n_drp = sum(vote_drp == 1),
+    pct_drp = mean(vote_drp == 1) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(pct_drp))
+
+#FASE 10 · AUDITORIA
+
+anti_join(
+  matching2 %>% filter(is_drp == 1),
+  ess3 %>% filter(vote_drp == 1) %>% 
+    distinct(cntry_iso2, party_vote_chr),
+  by = c("cntry" = "cntry_iso2", "party_vote" = "party_vote_chr")
+)
+
+# FASE 11 VARIAS COMPROBACIONES
+
+ess2 %>%
+  filter(cntry_iso2 == "DE") %>%
+  summarise(
+    n_total = n(),
+    n_con_voto = sum(!is.na(party_vote_chr)),
+    n_sin_voto = sum(is.na(party_vote_chr))
+  )
+
+ess2 %>%
+  filter(cntry_iso2 == "DE", !is.na(party_vote_chr)) %>%
+  distinct(party_vote_chr)
+
+anti_join(
+  matching2 %>% filter(cntry == "DE"),
+  ess2 %>% filter(cntry_iso2 == "DE") %>% distinct(party_vote_chr),
+  by = c("party_vote" = "party_vote_chr")
+)
+
+ess3 %>%
+  filter(cntry_iso2 == "DE", vote_drp == 1)
+
+ess2 %>%
+  group_by(cntry_iso2) %>%
+  summarise(
+    n_total = n(),
+    n_con_voto = sum(!is.na(party_vote_chr)),
+    pct_con_voto = mean(!is.na(party_vote_chr)) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(pct_con_voto)
+
+# distribución general
+ess3 %>% count(vote_drp, useNA = "always")
+
+# cuántos casos eran "voto con no-match"
+ess3 %>%
+  summarise(
+    n_vote = sum(!is.na(party_vote_chr)),
+    n_match = sum(!is.na(is_drp)),
+    n_nomatch = sum(!is.na(party_vote_chr) & is.na(is_drp))
+  )
+
+##########COMPROBACIONES
+
+matching2 %>% filter(cntry == "HR", is_drp == 1) %>% distinct(party_vote)
+matching2 %>% filter(cntry == "BE", is_drp == 1) %>% distinct(party_vote)
+
+ess2 %>% filter(cntry_iso2 == "HR", !is.na(party_vote_chr)) %>% count(party_vote_chr, sort=TRUE) %>% head(20)
+ess2 %>% filter(cntry_iso2 == "BE", !is.na(party_vote_chr)) %>% count(party_vote_chr, sort=TRUE) %>% head(20)
+
+###########################
+
+df_ue %>%
+  distinct(cntry_iso2, cntry) %>%
+  arrange(cntry_iso2)
+
+######################3333
+
+names(ess)
